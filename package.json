@@ -2,7 +2,7 @@
   "name": "codex-session-kit",
   "displayName": "Codex Session Kit",
   "description": "Bootstrap durable project memory for Codex and other AI coding workflows.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "local-dev",
   "license": "MIT",
   "repository": {
@@ -30,6 +30,10 @@
   "activationEvents": [
     "onCommand:codexSessionKit.initializeProjectMemoryDocs",
     "onCommand:codexSessionKit.updateMemoryDocsNow",
+    "onCommand:codexSessionKit.upgradeAiContextConfigToLatestDefaults",
+    "onCommand:codexSessionKit.generateSessionSummary",
+    "onCommand:codexSessionKit.openGettingStarted",
+    "onCommand:codexSessionKit.openGeneralDocumentation",
     "onCommand:codexSessionKit.validateMemoryDocs",
     "onCommand:codexSessionKit.startSessionFromProjectMemory",
     "onCommand:codexSessionKit.finishSessionAndUpdateProjectMemory",
@@ -53,6 +57,26 @@
         "command": "codexSessionKit.updateMemoryDocsNow",
         "category": "Project Memory",
         "title": "Update Memory Docs Now"
+      },
+      {
+        "command": "codexSessionKit.upgradeAiContextConfigToLatestDefaults",
+        "category": "Project Memory",
+        "title": "Upgrade AI Context Config To Latest Defaults"
+      },
+      {
+        "command": "codexSessionKit.generateSessionSummary",
+        "category": "Project Memory",
+        "title": "Generate Session Summary"
+      },
+      {
+        "command": "codexSessionKit.openGettingStarted",
+        "category": "Project Memory",
+        "title": "Open Getting Started"
+      },
+      {
+        "command": "codexSessionKit.openGeneralDocumentation",
+        "category": "Project Memory",
+        "title": "Open General Documentation"
       },
       {
         "command": "codexSessionKit.validateMemoryDocs",
@@ -142,6 +166,46 @@
           "default": true,
           "description": "Prefer .vscode/ai-context.json over extension settings when building prompts and initializing docs."
         },
+        "codexSessionKit.docs": {
+          "type": "array",
+          "default": [
+            {
+              "path": "docs/repo-summary.md",
+              "role": "repo-summary"
+            },
+            {
+              "path": "docs/architecture.md",
+              "role": "architecture"
+            },
+            {
+              "path": "docs/current-work.md",
+              "role": "current-work"
+            },
+            {
+              "path": "docs/refactor-roadmap.md",
+              "role": "refactor-roadmap"
+            },
+            {
+              "path": "docs/decisions.md",
+              "role": "decisions"
+            }
+          ],
+          "items": {
+            "type": "object",
+            "required": [
+              "path"
+            ],
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "role": {
+                "type": "string"
+              }
+            }
+          },
+          "description": "Fallback project memory docs used when no .vscode/ai-context.json file exists. Roles help prompts and auto-generated sections stay role-aware even when paths are customized."
+        },
         "codexSessionKit.docPaths": {
           "type": "array",
           "default": [
@@ -154,7 +218,7 @@
           "items": {
             "type": "string"
           },
-          "description": "Fallback project memory document paths used when no .vscode/ai-context.json file exists."
+          "description": "Legacy fallback project memory document paths used when no role-aware docs array is configured."
         }
       }
     }

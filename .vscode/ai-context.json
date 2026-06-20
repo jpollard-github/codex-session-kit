@@ -1,9 +1,24 @@
 {
-  "docPaths": [
-    "docs/repo-summary.md",
-    "docs/architecture.md",
-    "docs/current-work.md",
-    "docs/refactor-roadmap.md",
-    "docs/decisions.md"
+  "docs": [
+    {
+      "path": "docs/repo-summary.md",
+      "role": "repo-summary"
+    },
+    {
+      "path": "docs/architecture.md",
+      "role": "architecture"
+    },
+    {
+      "path": "docs/current-work.md",
+      "role": "current-work"
+    },
+    {
+      "path": "docs/refactor-roadmap.md",
+      "role": "refactor-roadmap"
+    },
+    {
+      "path": "docs/decisions.md",
+      "role": "decisions"
+    }
   ]
 }

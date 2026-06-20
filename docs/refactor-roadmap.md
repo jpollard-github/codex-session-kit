@@ -22,7 +22,7 @@
 - Avoid validation rules that mark docs stale because of the extension's own bookkeeping or packaging artifacts.
 
 <!-- codex-session-kit:auto-start -->
-> Auto-generated snapshot. Refreshed 6/20/2026, 5:31:31 PM. This section is managed by Codex Session Kit.
+> Auto-generated snapshot. Refreshed 6/20/2026, 6:27:43 PM. This section is managed by Codex Session Kit.
 
 ## Auto Snapshot
 
@@ -32,7 +32,7 @@
 - README is changing alongside implementation; ensure durable docs stay aligned with user-facing docs.
 
 ### Large code files
-- src/extension.js (43 KB)
+- src/extension.js (73 KB)
 
 ### Testing and maintenance gaps
 - No obvious test directory detected.

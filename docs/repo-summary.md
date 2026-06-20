@@ -4,6 +4,11 @@
 - `codex-session-kit` is a VS Code extension project for durable AI session bootstrapping.
 - It helps a repo define its purpose, architecture, active work, decisions, and planned refactors in stable markdown files.
 - The extension is meant to work especially well with Codex prompts and session handoffs.
+- Project memory config can now assign semantic roles to docs so prompts and updates stay useful even when file paths are customized.
+- The extension also tracks lightweight branch awareness so it can warn when project memory may be stale after switching branches.
+- The extension can generate a markdown session summary from git/worktree signals and suggest appending relevant notes into memory docs.
+- The extension can suggest a commit message after project-memory updates without creating a git commit automatically.
+- The sidebar now includes grouped workflow sections plus direct shortcuts to bundled Getting Started and General Documentation guides.
 - It now also includes repo-level validation, local packaging helpers, and Marketplace publishing prep for the VS Code extension workflow.
 
 ## Who it is for
@@ -28,7 +33,7 @@
 - Publish preflight helper: `scripts/publish-preflight.js`
 
 <!-- codex-session-kit:auto-start -->
-> Auto-generated snapshot. Refreshed 6/20/2026, 5:31:31 PM. This section is managed by Codex Session Kit.
+> Auto-generated snapshot. Refreshed 6/20/2026, 6:27:43 PM. This section is managed by Codex Session Kit.
 
 ## Auto Snapshot
 
@@ -40,7 +45,7 @@
 ### Repo signals
 - Workspace: `codex-session-kit`
 - README title: Codex Session Kit
-- Version: `0.1.0`
+- Version: `0.2.0`
 - Extension/main entry: `./src/extension.js`
 - Tracked memory docs: `docs/repo-summary.md`, `docs/architecture.md`, `docs/current-work.md`, `docs/refactor-roadmap.md`, `docs/decisions.md`
 
@@ -51,6 +56,7 @@
 - Directory: `scripts/`
 - Directory: `src/`
 - File: `.gitignore`
+- File: `.vscode/ai-context-state.json`
 - File: `.vscode/ai-context.json`
 - File: `.vscode/launch.json`
 - File: `LICENSE.md`

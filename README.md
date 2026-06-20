@@ -17,8 +17,15 @@ This MVP focuses on local workflow support, not API integrations.
 - `Project Memory: Update Memory Docs Now`
   - Scans the current workspace and refreshes the managed sections inside all tracked memory docs.
   - Uses local repo signals such as package metadata, file layout, git status, recent file changes, and open editors.
+  - When memory docs are updated, suggests a commit message like `docs: refresh project memory after auth refactor`.
+- `Project Memory: Upgrade AI Context Config To Latest Defaults`
+  - Rewrites `.vscode/ai-context.json` to the latest default role-aware `docs` format.
+  - Useful for migrating an older path-only config to the current default structure quickly.
+- `Project Memory: Generate Session Summary`
+  - Creates a markdown handoff summary from changed files, recent commits, detected decision signals, and added TODO-style lines.
+  - Offers to append suggested notes into the most relevant memory docs, especially current work and decisions.
 - `Project Memory: Validate Memory Docs`
-  - Checks for missing docs, stale docs, malformed managed sections, and docs that still look like placeholder-only starter text.
+  - Checks for missing docs, stale docs, malformed managed sections, branch-switch drift, and docs that still look like placeholder-only starter text.
   - Opens a validation report so drift is visible before handoff.
 - `Project Memory: Start Session From Project Memory`
   - Copies a reusable “read these docs first” prompt to the clipboard.
@@ -27,9 +34,9 @@ This MVP focuses on local workflow support, not API integrations.
 - `Project Memory: Show Project Memory Status`
   - Opens a quick status document showing which configured memory files exist and when they were last refreshed.
 - Codex activity-bar view
-  - Adds a `Codex` sidebar with one-click actions, live file status, and refresh timestamps.
+  - Adds a `Codex` sidebar with grouped actions, guide shortcuts, live file status, and refresh timestamps.
 - Status bar indicator
-  - Shows how many configured memory files exist in the current workspace.
+  - Shows how many configured memory files exist in the current workspace, with branch-aware warning details in the tooltip.
 
 ## Default Files
 
@@ -49,23 +56,43 @@ Example:
 
 ```json
 {
-  "docPaths": [
-    "docs/repo-summary.md",
-    "docs/architecture.md",
-    "docs/current-work.md",
-    "docs/refactor-roadmap.md",
-    "docs/decisions.md"
+  "docs": [
+    {
+      "path": "docs/repo-summary.md",
+      "role": "repo-summary"
+    },
+    {
+      "path": "docs/architecture.md",
+      "role": "architecture"
+    },
+    {
+      "path": "docs/current-work.md",
+      "role": "current-work"
+    },
+    {
+      "path": "docs/refactor-roadmap.md",
+      "role": "refactor-roadmap"
+    },
+    {
+      "path": "docs/decisions.md",
+      "role": "decisions"
+    }
   ]
 }
 ```
 
-If that file does not exist, the extension falls back to the `codexSessionKit.docPaths` setting in VS Code.
+Each doc can declare a `role` so prompts and auto-generated snapshots stay smart even when you use custom filenames like `docs/system-design.md` or `notes/hand-off.md`.
+
+The extension still accepts the older path-only `docPaths` format for backward compatibility.
+
+If that file does not exist, the extension falls back to the `codexSessionKit.docs` setting in VS Code, then to the legacy `codexSessionKit.docPaths` setting if needed.
 
 The extension also writes `.vscode/ai-context-state.json` to track lightweight session metadata:
 
 - When `Start Session From Project Memory` was last used
 - When `Finish Session And Update Project Memory` was last used
 - When each tracked memory doc was last refreshed
+- Which git branch was last seen, and when the workspace most recently switched branches
 
 “Last refreshed” means the last time a tracked memory doc was saved or created while the extension was active.
 
@@ -91,6 +118,24 @@ The updater currently uses local workspace signals including:
 - currently visible editors in VS Code
 - shallow file-type and structure heuristics
 
+## Branch Awareness
+
+Codex Session Kit now keeps lightweight local branch awareness for larger repos.
+
+When the extension notices that the workspace branch changed, it can warn:
+
+```text
+Project memory may be stale relative to the current branch.
+```
+
+How it works:
+
+- The extension remembers the last observed git branch in `.vscode/ai-context-state.json`
+- If the current branch changes, it records the switch and shows a warning once for that transition
+- Validation and status surfaces keep showing the branch-switch warning until the tracked memory docs have been refreshed after the switch
+
+This is especially helpful when `docs/current-work.md` or related handoff docs were accurate on one branch but no longer match the code you just checked out.
+
 Important limitation:
 
 The extension cannot directly read a private live Codex conversation or transcript. So when this README says it uses "current Codex session information," the practical implementation is local session context that VS Code can actually see, like open files and active repo changes.
@@ -115,7 +160,11 @@ The extension adds a `Codex` icon to the VS Code activity bar.
 
 Open that view and you will see:
 
+- `Codex Session Kit` hero item that opens general documentation
+- `Open Getting Started`
+- `Open General Documentation`
 - `Start Session From Project Memory`
+- `Generate Session Summary`
 - `Update Memory Docs Now`
 - `Validate Memory Docs`
 - `Finish Session And Update Project Memory`
@@ -129,11 +178,13 @@ How to use it:
 1. Click the `Codex` activity-bar icon.
 2. Use `Initialize Project Memory` the first time you set up a repo.
 3. Click `Start Session From Project Memory` when you begin a new AI conversation.
-4. Use `Update Memory Docs Now` whenever you want a fresh factual snapshot of the repo.
-5. Use `Validate Memory Docs` when you want the extension to flag missing, stale, or still-placeholder docs.
-6. Click any listed doc to open it directly.
-7. Click `Finish Session And Update Project Memory` when you want the AI to refresh the durable docs.
-8. Use the refresh button in the view title if the file list looks stale.
+4. Use `Generate Session Summary` when you want a quick handoff summary and optional append suggestions for the memory docs.
+5. Use `Update Memory Docs Now` whenever you want a fresh factual snapshot of the repo.
+6. Use `Upgrade AI Context Config To Latest Defaults` when you want to migrate `.vscode/ai-context.json` to the current default role-aware structure.
+7. Use `Validate Memory Docs` when you want the extension to flag missing, stale, or still-placeholder docs.
+8. Click any listed doc to open it directly.
+9. Click `Finish Session And Update Project Memory` when you want the AI to refresh the durable docs.
+10. Use the refresh button in the view title if the file list looks stale.
 
 Hover any doc in the sidebar to see:
 
@@ -141,18 +192,25 @@ Hover any doc in the sidebar to see:
 - Last refreshed timestamp
 - Last modified timestamp
 
+The bundled docs opened from the sidebar are:
+
+- `docs/getting-started.md`
+- `docs/general-documentation.md`
+
 ## Start-Session Prompt
 
 The start command copies a prompt shaped like this:
 
 ```text
 Before doing anything, read:
-- docs/repo-summary.md
-- docs/architecture.md
-- docs/current-work.md
-- docs/refactor-roadmap.md
-- docs/decisions.md
+- docs/repo-summary.md (repo-summary)
+- docs/architecture.md (architecture)
+- docs/current-work.md (current-work)
+- docs/refactor-roadmap.md (refactor-roadmap)
+- docs/decisions.md (decisions)
 Use those as the primary source of truth. Only inspect implementation files when needed.
+
+Use the doc roles to prioritize what to read closely and which files to update later.
 ```
 
 ## Finish-Session Prompt
@@ -161,10 +219,42 @@ The finish command copies a prompt shaped like this:
 
 ```text
 Review the changes made in this session.
+Before updating the memory docs, scan the current folder for changed, added, or deleted files, including files that may have been modified manually outside this chat session.
 Update the relevant docs in /docs so future AI sessions understand the current state, architecture, decisions, and next work.
 Relevant project memory files: docs/repo-summary.md, docs/architecture.md, docs/current-work.md, docs/refactor-roadmap.md, docs/decisions.md.
-Only update the files that changed meaningfully during this session.
+Incorporate meaningful repo changes from both this chat session and any manual edits discovered during the folder scan.
+Only update the files that changed meaningfully.
 ```
+
+## Session Summary Command
+
+`Project Memory: Generate Session Summary` creates a markdown summary that can include:
+
+- changed files from git status
+- recent commits, anchored to the last recorded start-session time when available
+- decision-like signals inferred from commit subjects and related notes
+- added `TODO`, `FIXME`, `HACK`, or `XXX` lines from the current diff
+
+After generating the summary, the extension can optionally append:
+
+- a concise working-session block into the current-work doc
+- candidate decision follow-ups into the decisions doc
+
+These appended notes are intentionally cautious. Decision detection is heuristic, so the extension suggests items to confirm rather than treating them as final architecture decisions automatically.
+
+## Suggested Commit Messages
+
+When the extension updates project memory docs, it can suggest a commit message without creating a commit automatically.
+
+Example:
+
+```text
+Project memory updated.
+Suggested commit:
+docs: refresh project memory after auth refactor
+```
+
+The suggestion is heuristic. It prefers the current branch topic when available, and otherwise falls back to non-doc changed-file context.
 
 ## Refresh Tracking
 
@@ -196,6 +286,7 @@ It currently checks for:
 - docs whose managed auto-generated section is missing or malformed
 - docs whose human notes still look like untouched starter template text
 - docs that were refreshed before newer repo file changes happened
+- project memory that may be stale after a git branch switch
 
 Where validation appears:
 
