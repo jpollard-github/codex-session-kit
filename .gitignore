@@ -1,3 +1,5 @@
 .DS_Store
 .vscode-test/
+.vscode/ai-context-state.json
 node_modules/
+codex-session-kit-0.1.0.vsix

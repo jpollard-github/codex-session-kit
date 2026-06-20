@@ -5,6 +5,22 @@
   "version": "0.1.0",
   "publisher": "local-dev",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/jpollard-github/codex-session-kit.git"
+  },
+  "homepage": "https://github.com/jpollard-github/codex-session-kit",
+  "icon": "media/codex-session-kit.png",
+  "scripts": {
+    "lint:extension": "node --check src/extension.js && node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json ok')\"",
+    "package:vsix": "vsce package",
+    "publish:check": "node scripts/publish-preflight.js",
+    "publish:vsix": "npm run publish:check && npm run lint:extension && npm run package:vsix",
+    "publish:marketplace": "npm run publish:check && npm run lint:extension && vsce publish"
+  },
+  "devDependencies": {
+    "@vscode/vsce": "^3.6.2"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
@@ -13,28 +29,109 @@
   ],
   "activationEvents": [
     "onCommand:codexSessionKit.initializeProjectMemoryDocs",
+    "onCommand:codexSessionKit.updateMemoryDocsNow",
+    "onCommand:codexSessionKit.validateMemoryDocs",
     "onCommand:codexSessionKit.startSessionFromProjectMemory",
     "onCommand:codexSessionKit.finishSessionAndUpdateProjectMemory",
-    "onCommand:codexSessionKit.showProjectMemoryStatus"
+    "onCommand:codexSessionKit.showProjectMemoryStatus",
+    "onView:codexSessionKit.projectMemoryView"
   ],
   "main": "./src/extension.js",
   "contributes": {
     "commands": [
       {
         "command": "codexSessionKit.initializeProjectMemoryDocs",
-        "title": "AI: Initialize Project Memory Docs"
+        "category": "Project Memory",
+        "title": "Initialize Project Memory"
       },
       {
         "command": "codexSessionKit.startSessionFromProjectMemory",
-        "title": "AI: Start Session From Project Memory"
+        "category": "Project Memory",
+        "title": "Start Session From Project Memory"
+      },
+      {
+        "command": "codexSessionKit.updateMemoryDocsNow",
+        "category": "Project Memory",
+        "title": "Update Memory Docs Now"
+      },
+      {
+        "command": "codexSessionKit.validateMemoryDocs",
+        "category": "Project Memory",
+        "title": "Validate Memory Docs"
       },
       {
         "command": "codexSessionKit.finishSessionAndUpdateProjectMemory",
-        "title": "AI: Finish Session And Update Project Memory"
+        "category": "Project Memory",
+        "title": "Finish Session And Update Project Memory"
       },
       {
         "command": "codexSessionKit.showProjectMemoryStatus",
-        "title": "AI: Show Project Memory Status"
+        "category": "Project Memory",
+        "title": "Show Project Memory Status"
+      },
+      {
+        "command": "codexSessionKit.refreshProjectMemoryView",
+        "category": "Project Memory",
+        "title": "Refresh Project Memory View",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "codexSessionKit",
+          "title": "Codex",
+          "icon": "media/codex-session-kit.svg"
+        }
+      ]
+    },
+    "views": {
+      "codexSessionKit": [
+        {
+          "id": "codexSessionKit.projectMemoryView",
+          "name": "Session Kit"
+        }
+      ]
+    },
+    "menus": {
+      "view/title": [
+        {
+          "command": "codexSessionKit.refreshProjectMemoryView",
+          "when": "view == codexSessionKit.projectMemoryView",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "codexSessionKit.startSessionFromProjectMemory",
+        "key": "cmd+alt+.",
+        "mac": "cmd+alt+.",
+        "when": "editorTextFocus || explorerViewletVisible"
+      },
+      {
+        "command": "codexSessionKit.updateMemoryDocsNow",
+        "key": "cmd+alt+u",
+        "mac": "cmd+alt+u",
+        "when": "editorTextFocus || explorerViewletVisible"
+      },
+      {
+        "command": "codexSessionKit.validateMemoryDocs",
+        "key": "cmd+alt+v",
+        "mac": "cmd+alt+v",
+        "when": "editorTextFocus || explorerViewletVisible"
+      },
+      {
+        "command": "codexSessionKit.finishSessionAndUpdateProjectMemory",
+        "key": "cmd+alt+/",
+        "mac": "cmd+alt+/",
+        "when": "editorTextFocus || explorerViewletVisible"
+      },
+      {
+        "command": "codexSessionKit.initializeProjectMemoryDocs",
+        "key": "cmd+alt+shift+.",
+        "mac": "cmd+alt+shift+.",
+        "when": "editorTextFocus || explorerViewletVisible"
       }
     ],
     "configuration": {
