@@ -4,118 +4,83 @@
 
 ## Philosophy
 
-Codex Session Kit is built around a simple belief:
+Codex Session Kit is built around one practical belief:
 
-> AI works better when repos carry their own durable memory.
+> repo scans are evidence, not understanding.
 
-Most AI coding sessions are strong in the moment and weak across time. A model can help with a task right now, but the reasoning behind that task often disappears as soon as the thread is gone.
+The extension is most useful when it helps a human or AI session produce a better handoff, not when it generates lots of shallow text.
 
-This extension exists to make that context survivable.
+## Product Shape
 
-## The Problem It Solves
+The product now separates two kinds of information:
 
-In longer-running repositories, a future AI session often does not know:
+1. Human-maintained handoff docs
+2. Machine-generated repo telemetry
 
-- what the project is really trying to do
-- which architectural choices are deliberate
-- what work is actively in progress
-- which refactors are planned versus accidental
-- what was decided and why
+Human docs are where meaning lives:
 
-Code alone rarely answers those questions cleanly.
+- repo purpose
+- active work
+- decisions
+- risks
+- next task
 
-## The Approach
-
-Instead of trying to automate everything, the extension splits project memory into two kinds of information:
-
-1. Auto-generated factual snapshots
-2. Human-maintained durable notes
-
-Auto-generated content is good for:
+Machine telemetry is where evidence lives:
 
 - changed files
-- git branch context
-- repo structure
-- recent activity
+- branch state
+- recent file activity
 - package metadata
+- coarse repo structure
 
-Human notes are better for:
+## Why This Changed
 
-- tradeoffs
-- intent
-- rationale
-- priorities
-- project-specific judgment
+The earlier workflow updated multiple docs with factual snapshots, but that output was often too shallow to be trusted as durable project memory.
 
-That split is the heart of the design.
+The handoff-first workflow is narrower:
 
-## Why Clipboard Prompts?
+- refresh one machine snapshot
+- draft one useful handoff
+- update only the human docs that matter
+- optionally review README.md when user-facing behavior changed
 
-The extension deliberately avoids provider-specific integrations in the MVP.
+## Two Similar Commands, Different Jobs
 
-That means:
+The extension has two related commands on purpose:
 
-- you can use it with different AI tools
-- the workflow stays portable
-- the repo memory matters more than the chat vendor
+- `Prepare Handoff Review`
+  - refreshes the machine snapshot first
+  - gives you a review/checklist view
+  - is best when you are still deciding what matters
+- `Generate Session Handoff`
+  - gives you the cleaner summary output
+  - is best when you want wording you can keep, paste, or append
 
-The product value is the habit, not the API coupling.
+They use many of the same repo signals, but they are for different moments:
 
-## Why Validation Matters
+- review first
+- handoff second
 
-Project memory is only useful if people trust it.
+## What Validation Means Now
 
-That is why the extension can warn about:
+Validation is about usefulness, not just activity.
 
-- missing docs
-- stale docs
-- malformed managed sections
+The extension now tries to catch:
+
+- missing tracked docs
+- untouched starter templates
+- stale handoff notes after real code changes
+- malformed snapshot sections
 - branch-switch drift
-- placeholder-only content
+- likely README review needs
 
-Validation is heuristic, not magical. It is meant to catch likely drift early, not prove perfect truth.
-
-## Why Branch Awareness Matters
-
-One of the fastest ways for project memory to become misleading is switching branches.
-
-`docs/current-work.md` may be accurate on one branch and wrong on another. The branch-aware warning is there to protect trust in the handoff layer, especially in larger repos.
-
-## Why Session Summaries Matter
-
-A good handoff is not a full transcript.
-
-A good handoff is:
-
-- what changed
-- what matters
-- what might need follow-up
-- what the next session should not forget
-
-The session-summary command tries to give you that shape quickly, while still leaving judgment in human hands.
+It still does not claim semantic certainty.
 
 ## What Success Looks Like
 
 The extension is doing its job when:
 
-- you can reopen a repo weeks later and orient quickly
-- a new AI thread does not need a long manual recap
-- teammates can understand active work without guesswork
-- durable docs stay small, current, and meaningful
-
-## Design Principles
-
-- Durable over clever
-- Helpful over automatic
-- Portable over provider-specific
-- Context first, implementation second
-- Human judgment stays in the loop
-
-## Practical Advice
-
-- Refresh docs when the repo changes materially.
-- Write decisions when future-you would otherwise ask “why did we do this?”
-- Keep `current-work` alive. It is often the highest-value handoff doc.
-- Do not confuse a large amount of text with useful memory.
-
-Clear, current, high-signal notes win.
+- a fresh AI thread starts with fewer dumb suggestions
+- future-you can re-enter the repo quickly
+- current-work notes capture what matters, not just what moved
+- the snapshot helps review changes without pretending to be architecture

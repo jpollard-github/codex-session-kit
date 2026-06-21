@@ -2,7 +2,7 @@
   "name": "codex-session-kit",
   "displayName": "Codex Session Kit",
   "description": "Bootstrap durable project memory for Codex and other AI coding workflows.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "publisher": "local-dev",
   "license": "MIT",
   "repository": {
@@ -13,7 +13,7 @@
   "icon": "media/codex-session-kit.png",
   "scripts": {
     "lint:extension": "node --check src/extension.js && node -e \"JSON.parse(require('fs').readFileSync('package.json','utf8')); console.log('package.json ok')\"",
-    "package:vsix": "vsce package",
+    "package:vsix": "mkdir -p .vsix && vsce package --out .vsix/codex-session-kit-v$npm_package_version.vsix",
     "publish:check": "node scripts/publish-preflight.js",
     "publish:vsix": "npm run publish:check && npm run lint:extension && npm run package:vsix",
     "publish:marketplace": "npm run publish:check && npm run lint:extension && vsce publish"
@@ -46,7 +46,7 @@
       {
         "command": "codexSessionKit.initializeProjectMemoryDocs",
         "category": "Project Memory",
-        "title": "Initialize Project Memory"
+        "title": "Initialize Handoff Docs"
       },
       {
         "command": "codexSessionKit.startSessionFromProjectMemory",
@@ -56,7 +56,7 @@
       {
         "command": "codexSessionKit.updateMemoryDocsNow",
         "category": "Project Memory",
-        "title": "Update Memory Docs Now"
+        "title": "Prepare Handoff Review"
       },
       {
         "command": "codexSessionKit.upgradeAiContextConfigToLatestDefaults",
@@ -66,7 +66,7 @@
       {
         "command": "codexSessionKit.generateSessionSummary",
         "category": "Project Memory",
-        "title": "Generate Session Summary"
+        "title": "Generate Session Handoff"
       },
       {
         "command": "codexSessionKit.openGettingStarted",
@@ -170,24 +170,20 @@
           "type": "array",
           "default": [
             {
-              "path": "docs/repo-summary.md",
-              "role": "repo-summary"
-            },
-            {
-              "path": "docs/architecture.md",
-              "role": "architecture"
+              "path": "docs/project-brief.md",
+              "role": "project-brief"
             },
             {
               "path": "docs/current-work.md",
               "role": "current-work"
             },
             {
-              "path": "docs/refactor-roadmap.md",
-              "role": "refactor-roadmap"
-            },
-            {
               "path": "docs/decisions.md",
               "role": "decisions"
+            },
+            {
+              "path": "docs/project-memory-snapshot.md",
+              "role": "project-memory-snapshot"
             }
           ],
           "items": {
@@ -204,21 +200,20 @@
               }
             }
           },
-          "description": "Fallback project memory docs used when no .vscode/ai-context.json file exists. Roles help prompts and auto-generated sections stay role-aware even when paths are customized."
+          "description": "Fallback handoff docs used when no .vscode/ai-context.json file exists. Roles help prompts and snapshot generation stay useful even when paths are customized."
         },
         "codexSessionKit.docPaths": {
           "type": "array",
           "default": [
-            "docs/repo-summary.md",
-            "docs/architecture.md",
+            "docs/project-brief.md",
             "docs/current-work.md",
-            "docs/refactor-roadmap.md",
-            "docs/decisions.md"
+            "docs/decisions.md",
+            "docs/project-memory-snapshot.md"
           ],
           "items": {
             "type": "string"
           },
-          "description": "Legacy fallback project memory document paths used when no role-aware docs array is configured."
+          "description": "Legacy fallback handoff document paths used when no role-aware docs array is configured."
         }
       }
     }

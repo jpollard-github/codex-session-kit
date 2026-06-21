@@ -4,11 +4,10 @@ const path = require("path");
 const cp = require("child_process");
 
 const DEFAULT_DOCS = [
-  { path: "docs/repo-summary.md", role: "repo-summary" },
-  { path: "docs/architecture.md", role: "architecture" },
+  { path: "docs/project-brief.md", role: "project-brief" },
   { path: "docs/current-work.md", role: "current-work" },
-  { path: "docs/refactor-roadmap.md", role: "refactor-roadmap" },
   { path: "docs/decisions.md", role: "decisions" },
+  { path: "docs/project-memory-snapshot.md", role: "project-memory-snapshot" },
 ];
 const DEFAULT_DOC_PATHS = DEFAULT_DOCS.map((doc) => doc.path);
 
@@ -24,6 +23,7 @@ const INTERNAL_MEMORY_PATHS = new Set([
   ".vscode/ai-context-state.json",
 ]);
 const DEFAULT_ROLE_BY_PATH = new Map(DEFAULT_DOCS.map((doc) => [doc.path, doc.role]));
+const AUTO_MANAGED_ROLES = new Set(["project-memory-snapshot"]);
 
 function activate(context) {
   const statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -53,7 +53,7 @@ function activate(context) {
     projectMemoryViewProvider.refresh();
 
     if (branchTracking.shouldWarn) {
-      const updateAction = "Update Memory Docs Now";
+      const updateAction = "Prepare Handoff Review";
       const statusAction = "Show Status";
       const choice = await vscode.window.showWarningMessage(
         `Project memory may be stale relative to the current branch. Switched from ${formatBranchName(
@@ -82,22 +82,18 @@ function activate(context) {
       const result = await initializeProjectMemory(workspaceFolder);
       await refreshStatusBar();
 
-      const action = "Open Repo Summary";
-      const copyCommitAction = "Copy Suggested Commit";
-      const message = `Project memory ready. Created ${result.createdCount} file${
+      const action = "Open Current Work";
+      const message = `Handoff docs ready. Created ${result.createdCount} file${
         result.createdCount === 1 ? "" : "s"
-      } and refreshed ${result.updatedCount} doc${result.updatedCount === 1 ? "" : "s"}. Suggested commit: ${result.suggestedCommit}`;
-      const choice = await vscode.window.showInformationMessage(message, action, copyCommitAction);
+      } and refreshed ${result.updatedCount} snapshot${result.updatedCount === 1 ? "" : "s"}.`;
+      const choice = await vscode.window.showInformationMessage(message, action);
 
       if (choice === action) {
-        const summaryPath = path.join(workspaceFolder.uri.fsPath, "docs/repo-summary.md");
+        const summaryPath = path.join(workspaceFolder.uri.fsPath, "docs/current-work.md");
         if (fs.existsSync(summaryPath)) {
           const document = await vscode.workspace.openTextDocument(vscode.Uri.file(summaryPath));
           await vscode.window.showTextDocument(document);
         }
-      } else if (choice === copyCommitAction) {
-        await vscode.env.clipboard.writeText(result.suggestedCommit);
-        vscode.window.showInformationMessage("Suggested commit message copied to clipboard.");
       }
     })
   );
@@ -112,14 +108,53 @@ function activate(context) {
 
       const result = await updateMemoryDocsNow(workspaceFolder);
       await refreshStatusBar();
-      const copyCommitAction = "Copy Suggested Commit";
+
+      const document = await vscode.workspace.openTextDocument({
+        language: "markdown",
+        content: buildHandoffReviewMarkdown(result.review, result.projectMemory),
+      });
+      await vscode.window.showTextDocument(document, { preview: true });
+
+      const actions = ["Append Suggested Notes", "Show Status"];
+      if (result.review.readmeRecommendation.shouldReview) {
+        actions.splice(1, 0, "Open README");
+      }
+
       const choice = await vscode.window.showInformationMessage(
-        `Updated ${result.updatedCount} memory doc${result.updatedCount === 1 ? "" : "s"} from workspace signals. Suggested commit: ${result.suggestedCommit}`,
-        copyCommitAction
+        `Snapshot refreshed. Review the suggested handoff before updating human docs.`,
+        ...actions
       );
-      if (choice === copyCommitAction) {
-        await vscode.env.clipboard.writeText(result.suggestedCommit);
-        vscode.window.showInformationMessage("Suggested commit message copied to clipboard.");
+
+      if (choice === "Append Suggested Notes") {
+        const appendResult = await appendSessionSummaryToMemoryDocs(workspaceFolder, result.projectMemory, result.review);
+        await refreshStatusBar();
+        const followUpActions = ["Show Status"];
+        if (appendResult.suggestedCommit) {
+          followUpActions.unshift("Copy Suggested Commit");
+        }
+        if (appendResult.readmePath) {
+          followUpActions.push("Open README");
+        }
+        const followUpChoice = await vscode.window.showInformationMessage(
+          appendResult.updatedDocs.length
+            ? `Appended suggested notes to ${appendResult.updatedDocs.join(", ")}.`
+            : "No matching handoff docs were available for suggested notes.",
+          ...followUpActions
+        );
+        if (followUpChoice === "Copy Suggested Commit" && appendResult.suggestedCommit) {
+          await vscode.env.clipboard.writeText(appendResult.suggestedCommit);
+          vscode.window.showInformationMessage("Suggested commit message copied to clipboard.");
+        } else if (followUpChoice === "Open README" && appendResult.readmePath) {
+          const readmeDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(appendResult.readmePath));
+          await vscode.window.showTextDocument(readmeDoc);
+        } else if (followUpChoice === "Show Status") {
+          await vscode.commands.executeCommand("codexSessionKit.showProjectMemoryStatus");
+        }
+      } else if (choice === "Open README" && result.review.readmeRecommendation.readmePath) {
+        const readmeDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(result.review.readmeRecommendation.readmePath));
+        await vscode.window.showTextDocument(readmeDoc);
+      } else if (choice === "Show Status") {
+        await vscode.commands.executeCommand("codexSessionKit.showProjectMemoryStatus");
       }
     })
   );
@@ -166,29 +201,46 @@ function activate(context) {
       await vscode.window.showTextDocument(document, { preview: true });
 
       const appendAction = "Append Suggested Notes";
+      const openReadmeAction = summary.readmeRecommendation.shouldReview ? "Open README" : null;
       const statusAction = "Show Status";
       const choice = await vscode.window.showInformationMessage(
-        "Session summary generated.",
+        "Session handoff generated.",
         appendAction,
+        ...(openReadmeAction ? [openReadmeAction] : []),
         statusAction
       );
 
       if (choice === appendAction) {
         const result = await appendSessionSummaryToMemoryDocs(workspaceFolder, projectMemory, summary);
         await refreshStatusBar();
-        const copyCommitAction = "Copy Suggested Commit";
         const message =
           result.updatedDocs.length
-            ? `Appended suggested notes to ${result.updatedDocs.join(", ")}. Suggested commit: ${result.suggestedCommit}`
+            ? `Appended suggested notes to ${result.updatedDocs.join(", ")}.`
             : "No matching memory docs were available for suggested summary notes.";
+        const actions = [];
+        if (result.suggestedCommit) {
+          actions.push("Copy Suggested Commit");
+        }
+        if (result.readmePath) {
+          actions.push("Open README");
+        }
+        actions.push("Show Status");
         const choice = await vscode.window.showInformationMessage(
           message,
-          ...(result.updatedDocs.length ? [copyCommitAction] : [])
+          ...actions
         );
-        if (choice === copyCommitAction) {
+        if (choice === "Copy Suggested Commit" && result.suggestedCommit) {
           await vscode.env.clipboard.writeText(result.suggestedCommit);
           vscode.window.showInformationMessage("Suggested commit message copied to clipboard.");
+        } else if (choice === "Open README" && result.readmePath) {
+          const readmeDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(result.readmePath));
+          await vscode.window.showTextDocument(readmeDoc);
+        } else if (choice === "Show Status") {
+          await vscode.commands.executeCommand("codexSessionKit.showProjectMemoryStatus");
         }
+      } else if (choice === openReadmeAction && summary.readmeRecommendation.readmePath) {
+        const readmeDoc = await vscode.workspace.openTextDocument(vscode.Uri.file(summary.readmeRecommendation.readmePath));
+        await vscode.window.showTextDocument(readmeDoc);
       } else if (choice === statusAction) {
         await vscode.commands.executeCommand("codexSessionKit.showProjectMemoryStatus");
       }
@@ -227,7 +279,7 @@ function activate(context) {
       await vscode.window.showTextDocument(document, { preview: true });
 
       if (validation.summary.issueCount === 0) {
-        vscode.window.showInformationMessage("Project memory validation passed. No missing, stale, or placeholder issues found.");
+        vscode.window.showInformationMessage("Project memory validation passed. The tracked handoff docs look usable.");
       } else {
         vscode.window.showWarningMessage(
           `Project memory validation found ${validation.summary.issueCount} issue${
@@ -300,10 +352,7 @@ function activate(context) {
             ]
           : []),
         ...projectMemory.docs.map(
-          (doc) =>
-            `${doc.exists ? "OK" : "MISSING"} ${formatDocStatusLabel(doc)} - last refreshed: ${formatTimestamp(
-              doc.lastRefreshedAt
-            )}`
+          (doc) => `${doc.exists ? "OK" : "MISSING"} ${formatDocStatusLabel(doc)} - ${describeDocFreshness(doc, validation.snapshot)}`
         ),
       ];
 
@@ -378,8 +427,10 @@ async function initializeProjectMemory(workspaceFolder) {
     }
 
     await ensureDirectory(path.dirname(doc.absolutePath));
-    fs.writeFileSync(doc.absolutePath, buildInitialDocShell(doc.relativePath, workspaceFolder.name), "utf8");
-    await setDocRefreshedAt(workspaceFolder, doc.relativePath, new Date().toISOString());
+    fs.writeFileSync(doc.absolutePath, buildInitialDocShell(doc, workspaceFolder.name), "utf8");
+    if (isAutoManagedDoc(doc)) {
+      await setDocRefreshedAt(workspaceFolder, doc.relativePath, new Date().toISOString());
+    }
     createdFiles.push(doc.absolutePath);
   }
 
@@ -409,18 +460,24 @@ async function updateMemoryDocsNow(workspaceFolder) {
   for (const doc of projectMemory.docs) {
     await ensureDirectory(path.dirname(doc.absolutePath));
     if (!fs.existsSync(doc.absolutePath)) {
-      fs.writeFileSync(doc.absolutePath, buildInitialDocShell(doc.relativePath, workspaceFolder.name), "utf8");
+      fs.writeFileSync(doc.absolutePath, buildInitialDocShell(doc, workspaceFolder.name), "utf8");
     }
 
-    const generatedContent = buildGeneratedDocContent(doc, snapshot);
-    upsertAutoSection(doc.absolutePath, generatedContent);
-    await setDocRefreshedAt(workspaceFolder, doc.relativePath, new Date().toISOString());
-    updatedCount += 1;
+    if (isAutoManagedDoc(doc)) {
+      const generatedContent = buildGeneratedDocContent(doc, snapshot);
+      upsertAutoSection(doc.absolutePath, generatedContent);
+      await setDocRefreshedAt(workspaceFolder, doc.relativePath, new Date().toISOString());
+      updatedCount += 1;
+    }
   }
+
+  const refreshedProjectMemory = await resolveProjectMemory(workspaceFolder);
+  const review = generateSessionSummary(workspaceFolder, refreshedProjectMemory);
 
   return {
     updatedCount,
-    suggestedCommit: buildProjectMemoryCommitSuggestion(projectMemory, snapshot.gitFacts),
+    projectMemory: refreshedProjectMemory,
+    review,
   };
 }
 
@@ -505,10 +562,11 @@ function buildFinishPrompt(docs) {
   return [
     "Review the changes made in this session.",
     "Before updating the memory docs, scan the current folder for changed, added, or deleted files, including files that may have been modified manually outside this chat session.",
-    "Update the relevant docs in /docs so future AI sessions understand the current state, architecture, decisions, and next work.",
+    "Write or update a concise handoff so future AI sessions understand what changed, why it changed, what to preserve, and what to do next.",
     `Relevant project memory files: ${docs.map((doc) => doc.relativePath).join(", ")}.`,
     "Incorporate meaningful repo changes from both this chat session and any manual edits discovered during the folder scan.",
     "Only update the files that changed meaningfully.",
+    "If the repo has a README.md and user-facing behavior changed materially, update the README too.",
   ].join("\n");
 }
 
@@ -538,16 +596,27 @@ function generateSessionSummary(workspaceFolder, projectMemory) {
   const commits = getSessionCommits(workspaceRoot, sessionStartedAt);
   const todoAdditions = getAddedTodoLines(workspaceRoot);
   const decisionSignals = detectDecisionSignals(workspaceRoot, commits, todoAdditions);
+  const changedFiles = gitFacts.changedFiles;
+  const materialFiles = getMeaningfulChangedFiles(changedFiles);
+  const userFacingSignals = detectUserFacingChangeSignals(workspaceRoot, changedFiles);
+  const readmeRecommendation = buildReadmeRecommendation(workspaceRoot, userFacingSignals);
 
   return {
     workspaceName: workspaceFolder.name,
     generatedAt: new Date().toISOString(),
     sessionStartedAt,
     branch: projectMemory.currentBranch,
-    changedFiles: gitFacts.changedFiles,
+    changedFiles,
+    materialFiles,
     commits,
     decisionSignals,
     todoAdditions,
+    whatChanged: buildWhatChangedSummary(materialFiles, commits),
+    whyChanged: buildWhyChangedSummary(commits, decisionSignals),
+    preserveRules: buildPreserveRules(decisionSignals, todoAdditions),
+    nextBestTask: buildNextBestTask(materialFiles, todoAdditions, gitFacts.clean),
+    doNotForget: buildDoNotForgetItems(projectMemory, materialFiles, todoAdditions, readmeRecommendation),
+    readmeRecommendation,
   };
 }
 
@@ -555,43 +624,82 @@ function buildSessionSummaryMarkdown(summary, projectMemory) {
   const trackedDocs = projectMemory.docs.map((doc) => formatDocPromptLabel(doc)).join(", ");
 
   return [
-    "# Session Summary",
+    "# Session Handoff",
+    "",
+    "Use this when you want a concise, reusable summary to keep or paste into a future session.",
     "",
     `Workspace: \`${summary.workspaceName}\``,
-    `Generated: ${formatTimestamp(summary.generatedAt)}`,
     `Branch: ${formatBranchName(summary.branch)}`,
-    `Session anchor: ${summary.sessionStartedAt ? formatTimestamp(summary.sessionStartedAt) : "No recorded start-session timestamp"}`,
     `Tracked memory docs: ${trackedDocs || "none"}`,
     "",
-    "## Changed Files",
-    ...toBullets(summary.changedFiles.length ? summary.changedFiles : ["No changed files detected in git status."]),
+    "## What Changed",
+    ...toBullets(summary.whatChanged),
     "",
-    "## Commits",
-    ...toBullets(
-      summary.commits.length
-        ? summary.commits.map((commit) => `${commit.subject} (${commit.shortHash}, ${formatTimestamp(commit.date)})`)
-        : ["No recent commits detected for this session summary."]
-    ),
+    "## Why",
+    ...toBullets(summary.whyChanged),
     "",
-    "## Decisions Detected",
-    ...toBullets(
-      summary.decisionSignals.length
-        ? summary.decisionSignals.map((signal) => `${signal.summary} Signal: ${signal.signal}`)
-        : ["No obvious decision-like signals were detected."]
-    ),
+    "## Files Touched",
+    ...toBullets(summary.materialFiles.length ? summary.materialFiles : ["No meaningful changed files detected."]),
     "",
-    "## TODOs Added",
-    ...toBullets(
-      summary.todoAdditions.length
-        ? summary.todoAdditions.map((item) => `\`${item.filePath}\`: ${item.text}`)
-        : ["No added TODO-style lines detected in the current diff."]
-    ),
+    "## Rules Or Decisions To Preserve",
+    ...toBullets(summary.preserveRules),
     "",
-    "## Suggested Memory Doc Targets",
+    "## Next Best Task",
+    ...toBullets(summary.nextBestTask),
+    "",
+    "## Do Not Forget",
+    ...toBullets(summary.doNotForget),
+    "",
+    "## Review Targets",
     ...toBullets(buildSuggestedMemoryDocTargets(projectMemory.docs, summary)),
     "",
-    "## Suggested Next Step",
-    "- Use `Append Suggested Notes` if you want the extension to add a concise session handoff block into the most relevant memory docs.",
+    "## Notes",
+    ...toBullets([
+      summary.commits.length
+        ? `Recent commits: ${summary.commits.map((commit) => `\`${commit.shortHash}\` ${commit.subject}`).join("; ")}`
+        : "No recent commits detected for this handoff.",
+      summary.todoAdditions.length
+        ? `TODO-style additions: ${summary.todoAdditions.map((item) => `\`${item.filePath}\` ${item.text}`).join("; ")}`
+        : "No added TODO-style lines detected in the current diff.",
+      summary.readmeRecommendation.shouldReview
+        ? "README review recommended because user-facing behavior may have changed."
+        : "README review does not look necessary from current signals.",
+    ]),
+  ].join("\n");
+}
+
+function buildHandoffReviewMarkdown(summary, projectMemory) {
+  return [
+    "# Handoff Review",
+    "",
+    "Use this before writing the final handoff. It is a review/checklist view, not the final polished summary.",
+    "",
+    `Workspace: \`${summary.workspaceName}\``,
+    `Branch: ${formatBranchName(summary.branch)}`,
+    "",
+    "## Review Checklist",
+    ...toBullets([
+      "Confirm which changed files actually changed behavior.",
+      "Decide what future edits must preserve.",
+      "Decide whether the next task is obvious enough to capture now.",
+      summary.readmeRecommendation.shouldReview
+        ? "Review README.md because user-facing behavior may have changed."
+        : "README review does not look necessary from current signals.",
+    ]),
+    "",
+    "## Likely Files To Review",
+    ...toBullets(summary.materialFiles.length ? summary.materialFiles : ["No meaningful changed files detected."]),
+    "",
+    "## Candidate Handoff Notes",
+    ...toBullets(summary.whatChanged),
+    ...toBullets(summary.whyChanged),
+    ...toBullets(summary.preserveRules),
+    "",
+    "## Questions To Answer Before You Append Notes",
+    ...toBullets(buildReviewQuestions(summary)),
+    "",
+    "## If You Want The Cleaner Output",
+    "- Run `Project Memory: Generate Session Handoff` for the more polished, reusable handoff document.",
   ].join("\n");
 }
 
@@ -599,6 +707,7 @@ async function appendSessionSummaryToMemoryDocs(workspaceFolder, projectMemory, 
   const updatedDocs = [];
   const currentWorkDoc = findDocByRole(projectMemory.docs, "current-work");
   const decisionsDoc = findDocByRole(projectMemory.docs, "decisions");
+  const readmePath = summary.readmeRecommendation.readmePath;
 
   if (currentWorkDoc) {
     await ensureDocExists(workspaceFolder, currentWorkDoc);
@@ -614,26 +723,35 @@ async function appendSessionSummaryToMemoryDocs(workspaceFolder, projectMemory, 
     updatedDocs.push(decisionsDoc.relativePath);
   }
 
+  if (summary.readmeRecommendation.shouldReview && currentWorkDoc) {
+    appendBlockBeforeAutoSection(
+      currentWorkDoc.absolutePath,
+      buildReadmeFollowUpBlock(summary.readmeRecommendation)
+    );
+  }
+
   return {
     updatedDocs,
-    suggestedCommit: buildProjectMemoryCommitSuggestion(projectMemory, getGitFacts(workspaceFolder.uri.fsPath)),
+    suggestedCommit: buildProjectMemoryCommitSuggestion(summary),
+    readmePath,
   };
 }
 
-function buildInitialDocShell(relativePath, workspaceName) {
-  return [
-    `# ${humanizeFileTitle(relativePath)}`,
-    "",
-    "These notes mix auto-generated repo facts with human-maintained context.",
-    "",
-    "## Human Notes",
-    "- Add durable context here that should survive automatic refreshes.",
-    "",
-    `${AUTO_START}`,
-    `> Auto-generated snapshot for ${workspaceName}. Run \`Project Memory: Update Memory Docs Now\` to refresh.`,
-    `${AUTO_END}`,
-    "",
-  ].join("\n");
+function buildInitialDocShell(doc, workspaceName) {
+  if (isAutoManagedDoc(doc)) {
+    return [
+      `# ${humanizeFileTitle(doc.relativePath)}`,
+      "",
+      "Machine-generated repo telemetry. Refresh this file when you want a fresh scan of the workspace before writing a handoff.",
+      "",
+      `${AUTO_START}`,
+      `> Auto-generated snapshot for ${workspaceName}. Run \`Project Memory: Prepare Handoff Review\` to refresh the repo scan.`,
+      `${AUTO_END}`,
+      "",
+    ].join("\n");
+  }
+
+  return buildHumanDocTemplate(doc);
 }
 
 function upsertAutoSection(filePath, generatedContent) {
@@ -802,13 +920,20 @@ function getGitFacts(workspaceRoot) {
   }
 }
 
-function buildProjectMemoryCommitSuggestion(projectMemory, gitFacts) {
-  const context = inferCommitContext(projectMemory.currentBranch, gitFacts?.changedFiles ?? []);
-  if (!context) {
-    return "docs: refresh project memory";
+function buildProjectMemoryCommitSuggestion(summary) {
+  const context = inferCommitContext(summary.branch, summary.materialFiles ?? summary.changedFiles ?? []);
+  const why = Array.isArray(summary.whyChanged) ? summary.whyChanged[0] : null;
+  const normalizedWhy = why ? why.replace(/^Likely intent:\s*/i, "").replace(/\.$/, "").trim() : null;
+
+  if (context && normalizedWhy && normalizedWhy !== "Changes inferred from changed files and branch context") {
+    return `docs: capture handoff for ${context} (${normalizedWhy})`;
   }
 
-  return `docs: refresh project memory after ${context}`;
+  if (context) {
+    return `docs: capture handoff for ${context}`;
+  }
+
+  return null;
 }
 
 function inferCommitContext(branchName, changedFiles) {
@@ -1023,7 +1148,7 @@ function findRecentFiles(fileStats) {
   return [...fileStats]
     .sort((a, b) => new Date(b.mtime).getTime() - new Date(a.mtime).getTime())
     .slice(0, MAX_RECENT_FILES)
-    .map((entry) => `${entry.relativePath} (${formatTimestamp(entry.mtime)})`);
+    .map((entry) => entry.relativePath);
 }
 
 function summarizeExtensions(fileStats) {
@@ -1040,134 +1165,57 @@ function summarizeExtensions(fileStats) {
 }
 
 function buildGeneratedDocContent(doc, snapshot) {
-  const generatedAt = formatTimestamp(snapshot.now);
   const fileName = path.basename(doc.relativePath);
-  const header = `> Auto-generated snapshot. Refreshed ${generatedAt}. This section is managed by Codex Session Kit.`;
+  const header = "> Auto-generated repo telemetry. This section is managed by Codex Session Kit.";
 
   const sectionMap = {
-    "repo-summary": buildRepoSummarySnapshot(snapshot),
-    architecture: buildArchitectureSnapshot(snapshot),
-    "current-work": buildCurrentWorkSnapshot(snapshot),
-    "refactor-roadmap": buildRefactorRoadmapSnapshot(snapshot),
-    decisions: buildDecisionsSnapshot(snapshot),
-    "repo-summary.md": buildRepoSummarySnapshot(snapshot),
-    "architecture.md": buildArchitectureSnapshot(snapshot),
-    "current-work.md": buildCurrentWorkSnapshot(snapshot),
-    "refactor-roadmap.md": buildRefactorRoadmapSnapshot(snapshot),
-    "decisions.md": buildDecisionsSnapshot(snapshot),
+    "project-memory-snapshot": buildProjectMemorySnapshot(snapshot),
+    "project-memory-snapshot.md": buildProjectMemorySnapshot(snapshot),
   };
 
   const body = sectionMap[doc.role] ?? sectionMap[fileName] ?? buildGenericSnapshot(snapshot);
   return `${header}\n\n${body}`;
 }
 
-function buildRepoSummarySnapshot(snapshot) {
+function buildProjectMemorySnapshot(snapshot) {
   return [
-    "## Auto Snapshot",
+    "## Snapshot",
     "",
-    "### What this project appears to be",
+    "### Project Signals",
     ...toBullets(buildProjectIdentity(snapshot)),
     "",
-    "### Repo signals",
+    "### Workspace State",
     ...toBullets([
       `Workspace: \`${snapshot.workspaceName}\``,
       snapshot.readmeTitle ? `README title: ${snapshot.readmeTitle}` : null,
       snapshot.packageFacts?.version ? `Version: \`${snapshot.packageFacts.version}\`` : null,
-      snapshot.packageFacts?.main ? `Extension/main entry: \`${snapshot.packageFacts.main}\`` : null,
-      `Tracked memory docs: ${snapshot.trackedDocs.map((item) => `\`${item}\``).join(", ")}`,
-    ]),
-    "",
-    "### Key files and directories",
-    ...toBullets([
-      ...snapshot.topDirectories.slice(0, 8).map((item) => `Directory: \`${item}\``),
-      ...snapshot.topFiles.slice(0, 6).map((item) => `File: \`${item}\``),
-    ]),
-    "",
-    "### Package scripts",
-    ...toBullets(snapshot.packageFacts?.scripts?.length ? snapshot.packageFacts.scripts.map((item) => `\`${item}\``) : ["No package scripts detected."]),
-  ].join("\n");
-}
-
-function buildArchitectureSnapshot(snapshot) {
-  return [
-    "## Auto Snapshot",
-    "",
-    "### Top-level structure",
-    ...toBullets(snapshot.topDirectories.length ? snapshot.topDirectories.slice(0, 12).map((item) => `\`${item}\``) : ["No top-level directories detected."]),
-    "",
-    "### File mix",
-    ...toBullets(snapshot.extensionCounts.length ? snapshot.extensionCounts : ["No files detected."]),
-    "",
-    "### Likely integration points",
-    ...toBullets(buildIntegrationPoints(snapshot)),
-    "",
-    "### Architectural notes from scan",
-    ...toBullets(buildArchitectureNotes(snapshot)),
-  ].join("\n");
-}
-
-function buildCurrentWorkSnapshot(snapshot) {
-  return [
-    "## Auto Snapshot",
-    "",
-    "### Current repo activity",
-    ...toBullets([
-      snapshot.gitFacts.branch ? `Active git branch: \`${snapshot.gitFacts.branch}\`` : "Git branch unavailable.",
+      snapshot.gitFacts.branch ? `Active branch: \`${snapshot.gitFacts.branch}\`` : null,
       snapshot.gitFacts.clean ? "Working tree appears clean." : `Working tree has ${snapshot.gitFacts.changedFiles.length} changed file(s).`,
     ]),
     "",
-    "### Changed files",
-    ...toBullets(snapshot.gitFacts.changedFiles.length ? snapshot.gitFacts.changedFiles : ["No git changes detected."]),
-    "",
-    "### Open editors",
-    ...toBullets(snapshot.openEditors.length ? snapshot.openEditors.map((item) => `\`${item}\``) : ["No visible editors detected."]),
-    "",
-    "### Recently modified files",
-    ...toBullets(snapshot.recentFiles.length ? snapshot.recentFiles : ["No recent files detected."]),
-  ].join("\n");
-}
-
-function buildRefactorRoadmapSnapshot(snapshot) {
-  return [
-    "## Auto Snapshot",
-    "",
-    "### Potential refactor signals",
-    ...toBullets(buildRefactorSignals(snapshot)),
-    "",
-    "### Large code files",
-    ...toBullets(snapshot.largeJsFiles.length ? snapshot.largeJsFiles : ["No unusually large JS/TS files detected from the scan threshold."]),
-    "",
-    "### Testing and maintenance gaps",
+    "### Likely Files To Review",
     ...toBullets([
+      ...getMeaningfulChangedFiles(snapshot.gitFacts.changedFiles).slice(0, 10).map((item) => `Changed: \`${item}\``),
+      ...snapshot.recentFiles.slice(0, 5).map((item) => `Recent: \`${item}\``),
+    ]),
+    "",
+    "### Repo Shape",
+    ...toBullets(buildIntegrationPoints(snapshot)),
+    "",
+    "### Scan Notes",
+    "",
+    ...toBullets([
+      `Tracked handoff docs: ${snapshot.trackedDocs.map((item) => `\`${item}\``).join(", ")}`,
+      snapshot.packageFacts?.main ? `Primary entry point appears to be \`${snapshot.packageFacts.main}\`.` : null,
       snapshot.hasTests ? "A test directory appears to exist." : "No obvious test directory detected.",
-      snapshot.gitFacts.clean ? "Working tree is clean, which lowers short-term drift risk." : "There are local changes, so docs may need a refresh before handoff.",
-    ]),
-  ].join("\n");
-}
-
-function buildDecisionsSnapshot(snapshot) {
-  return [
-    "## Auto Snapshot",
-    "",
-    "### Durable facts worth confirming",
-    ...toBullets([
-      snapshot.packageFacts?.name ? `Package name: \`${snapshot.packageFacts.name}\`` : null,
-      snapshot.packageFacts?.displayName ? `Display name: ${snapshot.packageFacts.displayName}` : null,
-      snapshot.packageFacts?.description ? `Description: ${snapshot.packageFacts.description}` : null,
-      snapshot.gitFacts.branch ? `Current branch during scan: \`${snapshot.gitFacts.branch}\`` : null,
-    ]),
-    "",
-    "### Suggested human follow-up",
-    ...toBullets([
-      "Promote important implementation choices from current work into explicit decision log entries.",
-      "Use this file for decisions and consequences that cannot be inferred safely from code scanning alone.",
+      snapshot.largeJsFiles.length ? `Larger code files: ${snapshot.largeJsFiles.join(", ")}` : null,
     ]),
   ].join("\n");
 }
 
 function buildGenericSnapshot(snapshot) {
   return [
-    "## Auto Snapshot",
+    "## Snapshot",
     "",
     ...toBullets([
       `Workspace: \`${snapshot.workspaceName}\``,
@@ -1260,9 +1308,7 @@ function buildStatusTooltip(projectMemory) {
     `Last start prompt: ${formatTimestamp(projectMemory.state.lastStartPromptAt)}`,
     `Last finish prompt: ${formatTimestamp(projectMemory.state.lastFinishPromptAt)}`,
     "",
-    ...projectMemory.docs.map(
-      (doc) => `${doc.exists ? "Exists" : "Missing"}: ${formatDocStatusLabel(doc)} (${formatTimestamp(doc.lastRefreshedAt)})`
-    ),
+    ...projectMemory.docs.map((doc) => `${doc.exists ? "Exists" : "Missing"}: ${formatDocStatusLabel(doc)}`),
   ];
   return lines.join("\n");
 }
@@ -1288,6 +1334,7 @@ async function validateResolvedProjectMemory(workspaceFolder, projectMemory) {
   }
 
   const issueCount = docs.reduce((count, doc) => count + doc.issues.length, 0) + repoIssues.length;
+  const readmeRecommendation = buildReadmeRecommendation(workspaceFolder.uri.fsPath, detectUserFacingChangeSignals(workspaceFolder.uri.fsPath, snapshot.gitFacts.changedFiles));
 
   return {
     workspaceName: workspaceFolder.name,
@@ -1295,6 +1342,7 @@ async function validateResolvedProjectMemory(workspaceFolder, projectMemory) {
     docs,
     repoIssues,
     branchStatus,
+    readmeRecommendation,
     summary: {
       issueCount,
       docsWithIssues: docs.filter((doc) => doc.issues.length > 0).length,
@@ -1325,8 +1373,9 @@ function validateDoc(doc, snapshot) {
   const content = doc.content ?? "";
   const hasAutoStart = content.includes(AUTO_START);
   const hasAutoEnd = content.includes(AUTO_END);
+  const shouldHaveManagedSection = isAutoManagedDoc(doc);
 
-  if (hasAutoStart !== hasAutoEnd) {
+  if (shouldHaveManagedSection && hasAutoStart !== hasAutoEnd) {
     flags.hasMalformedManagedSection = true;
     issues.push({
       severity: "warning",
@@ -1335,7 +1384,7 @@ function validateDoc(doc, snapshot) {
     });
   }
 
-  if (!hasAutoStart && !hasAutoEnd) {
+  if (shouldHaveManagedSection && !hasAutoStart && !hasAutoEnd) {
     flags.hasMalformedManagedSection = true;
     issues.push({
       severity: "warning",
@@ -1382,31 +1431,35 @@ function looksLikePlaceholderHumanNotes(humanNotes) {
   }
 
   const normalized = humanNotes.toLowerCase().replace(/\s+/g, " ").trim();
-  const placeholderPhrases = [
-    "these notes mix auto-generated repo facts with human-maintained context.",
-    "## human notes",
-    "add durable context here that should survive automatic refreshes.",
-  ];
-  const hasOnlyPlaceholderText = placeholderPhrases.every((phrase) => normalized.includes(phrase));
-  const withoutPlaceholder = placeholderPhrases.reduce((value, phrase) => value.replace(phrase, ""), normalized).trim();
-  return hasOnlyPlaceholderText && withoutPlaceholder.length < 20;
+  return getPlaceholderPhraseGroups().some((placeholderPhrases) => {
+    const hasOnlyPlaceholderText = placeholderPhrases.every((phrase) => normalized.includes(phrase));
+    const withoutPlaceholder = placeholderPhrases.reduce((value, phrase) => value.replace(phrase, ""), normalized).trim();
+    return hasOnlyPlaceholderText && withoutPlaceholder.length < 30;
+  });
 }
 
 function getDocStaleness(doc, snapshot) {
-  const refreshedAt = parseTimestamp(doc.lastRefreshedAt);
-  if (!refreshedAt) {
-    return { isStale: true, reason: "Doc has never been refreshed." };
+  const relevantTimestamp = parseTimestamp(isAutoManagedDoc(doc) ? doc.lastRefreshedAt : doc.lastModifiedAt ?? doc.lastRefreshedAt);
+  if (!relevantTimestamp) {
+    return { isStale: true, reason: isAutoManagedDoc(doc) ? "Snapshot has never been refreshed." : "Human notes have never been updated." };
   }
 
-  if (Date.now() - refreshedAt > STALE_DOC_DAYS * 24 * 60 * 60 * 1000) {
-    return { isStale: true, reason: `Doc has not been refreshed in more than ${STALE_DOC_DAYS} days.` };
+  if (Date.now() - relevantTimestamp > STALE_DOC_DAYS * 24 * 60 * 60 * 1000) {
+    return {
+      isStale: true,
+      reason: isAutoManagedDoc(doc)
+        ? `Snapshot has not been refreshed in more than ${STALE_DOC_DAYS} days.`
+        : `Human notes have not been reviewed in more than ${STALE_DOC_DAYS} days.`,
+    };
   }
 
   const newestRepoChange = getNewestRepoChangeTimestamp(snapshot);
-  if (newestRepoChange && refreshedAt < newestRepoChange.timestamp) {
+  if (newestRepoChange && relevantTimestamp < newestRepoChange.timestamp) {
     return {
       isStale: true,
-      reason: `Doc was last refreshed before newer repo changes in \`${newestRepoChange.relativePath}\`.`,
+      reason: isAutoManagedDoc(doc)
+        ? `Snapshot is older than repo changes in \`${newestRepoChange.relativePath}\`.`
+        : `Human notes may need review because code changed later in \`${newestRepoChange.relativePath}\`.`,
     };
   }
 
@@ -1437,15 +1490,15 @@ function buildValidationReport(validation) {
     "# Project Memory Validation",
     "",
     `Workspace: \`${validation.workspaceName}\``,
-    `Checked: ${formatTimestamp(validation.snapshot.now)}`,
     `Issues found: ${validation.summary.issueCount}`,
     "",
     "## Summary",
     `- Missing docs: ${validation.summary.missingDocs}`,
-    `- Stale docs: ${validation.summary.staleDocs}`,
+    `- Needs review: ${validation.summary.staleDocs}`,
     `- Placeholder-only docs: ${validation.summary.placeholderDocs}`,
     `- Malformed managed sections: ${validation.summary.malformedDocs}`,
     `- Branch-switch warnings: ${validation.summary.branchSwitchWarnings}`,
+    `- README review recommended: ${validation.readmeRecommendation.shouldReview ? "yes" : "no"}`,
     "",
   ];
 
@@ -1468,7 +1521,7 @@ function buildValidationReport(validation) {
       continue;
     }
     lines.push(`### ${formatDocStatusLabel(doc)}`);
-    lines.push(`- Last refreshed: ${formatTimestamp(doc.lastRefreshedAt)}`);
+    lines.push(`- Freshness: ${describeDocFreshness(doc, validation.snapshot)}`);
     for (const issue of doc.issues) {
       lines.push(`- ${issue.severity.toUpperCase()}: ${issue.message}`);
     }
@@ -1476,10 +1529,236 @@ function buildValidationReport(validation) {
   }
 
   lines.push("## Guidance", "");
-  lines.push("- Use `Project Memory: Update Memory Docs Now` to refresh managed sections.");
-  lines.push("- Add or expand human notes when a doc still contains starter text.");
+  lines.push("- Use `Project Memory: Prepare Handoff Review` to refresh the snapshot and review the suggested handoff.");
+  lines.push("- Add or expand human notes when a doc still contains starter prompts.");
+  if (validation.readmeRecommendation.shouldReview) {
+    lines.push(`- Review README.md because ${validation.readmeRecommendation.reasons.join("; ")}.`);
+  }
   lines.push("- Re-run validation after updating the docs.");
   return lines.join("\n");
+}
+
+function isAutoManagedDoc(doc) {
+  return AUTO_MANAGED_ROLES.has(doc.role) || path.basename(doc.relativePath) === "project-memory-snapshot.md";
+}
+
+function buildHumanDocTemplate(doc) {
+  const sectionsByRole = {
+    "project-brief": [
+      "## Repo Purpose",
+      "- What does this repo do for users or the team?",
+      "",
+      "## How To Work In This Repo",
+      "- How do you run, test, or validate changes locally?",
+      "",
+      "## Important Constraints",
+      "- What should AI or future-you avoid changing casually?",
+      "",
+      "## Architecture Rules Worth Preserving",
+      "- What design assumptions or boundaries matter most?",
+    ],
+    "current-work": [
+      "## Active Work",
+      "- What changed recently that future-you should know before editing?",
+      "",
+      "## Next Best Task",
+      "- What is the most useful follow-up from here?",
+      "",
+      "## Risks Or Watchouts",
+      "- What could be easy to break or misunderstand?",
+    ],
+    decisions: [
+      "## Decision Log",
+      "- Record only durable decisions with context and consequences.",
+      "",
+      "## Candidate Decisions To Confirm",
+      "- Promote items here only after they are real choices, not guesses.",
+    ],
+  };
+
+  const sections = sectionsByRole[doc.role] ?? [
+    "## Notes",
+    "- Add durable context here.",
+  ];
+
+  return [`# ${humanizeFileTitle(doc.relativePath)}`, "", ...sections, ""].join("\n");
+}
+
+function getPlaceholderPhraseGroups() {
+  return [
+    [
+      "## repo purpose",
+      "what does this repo do for users or the team?",
+      "## important constraints",
+      "what should ai or future-you avoid changing casually?",
+    ],
+    [
+      "## active work",
+      "what changed recently that future-you should know before editing?",
+      "## next best task",
+      "what is the most useful follow-up from here?",
+    ],
+    [
+      "## decision log",
+      "record only durable decisions with context and consequences.",
+      "## candidate decisions to confirm",
+      "promote items here only after they are real choices, not guesses.",
+    ],
+  ];
+}
+
+function getMeaningfulChangedFiles(changedFiles) {
+  return changedFiles
+    .map((line) => line.trim().split(/\s+/).pop())
+    .filter(Boolean)
+    .filter((value) => !INTERNAL_MEMORY_PATHS.has(value));
+}
+
+function buildWhatChangedSummary(materialFiles, commits) {
+  if (materialFiles.length === 0) {
+    return ["No meaningful changed files detected yet."];
+  }
+
+  const grouped = summarizePaths(materialFiles);
+  const commitHint = commits.length ? `Recent commit theme: ${commits[0].subject}.` : null;
+  return [
+    `Likely work areas: ${grouped.join(", ")}.`,
+    commitHint,
+  ].filter(Boolean);
+}
+
+function buildWhyChangedSummary(commits, decisionSignals) {
+  if (commits.length > 0) {
+    return [`Likely intent: ${commits[0].subject}.`];
+  }
+  if (decisionSignals.length > 0) {
+    return [`Likely intent: ${decisionSignals[0].summary}.`];
+  }
+  return ["Likely intent: Changes inferred from changed files and branch context."];
+}
+
+function buildPreserveRules(decisionSignals, todoAdditions) {
+  const items = [];
+  for (const signal of decisionSignals.slice(0, 3)) {
+    items.push(`${signal.summary} (${signal.signal})`);
+  }
+  for (const todo of todoAdditions.slice(0, 2)) {
+    items.push(`${todo.text} in ${todo.filePath}`);
+  }
+  return items.length ? items : ["No durable rules were inferred confidently. Review the touched files before editing further."];
+}
+
+function buildNextBestTask(materialFiles, todoAdditions, isClean) {
+  if (todoAdditions.length > 0) {
+    return [`Resolve or triage the new TODO-style follow-ups in ${todoAdditions.map((item) => item.filePath).join(", ")}.`];
+  }
+  if (materialFiles.length > 0) {
+    return [`Write a short human handoff for ${summarizePaths(materialFiles).join(", ")} and confirm what should not break next.`];
+  }
+  return [isClean ? "No immediate handoff task detected." : "Review the working tree and capture the meaningful change before moving on."];
+}
+
+function buildDoNotForgetItems(projectMemory, materialFiles, todoAdditions, readmeRecommendation) {
+  const items = [];
+  if (projectMemory.branchStatus?.hasBranchWarning) {
+    items.push(
+      `This branch changed from ${formatBranchName(projectMemory.branchStatus.previousBranch)} to ${formatBranchName(
+        projectMemory.branchStatus.currentBranch
+      )}; make sure the handoff matches the current branch.`
+    );
+  }
+  if (materialFiles.length > 0) {
+    items.push(`Capture the why behind changes in ${materialFiles.slice(0, 5).join(", ")} before ending the session.`);
+  }
+  if (todoAdditions.length > 0) {
+    items.push("New TODO-style lines were added; confirm whether they represent debt, scope cuts, or next tasks.");
+  }
+  if (readmeRecommendation.shouldReview) {
+    items.push("README.md may need an update because user-facing behavior appears to have changed.");
+  }
+  return items.length ? items : ["No special follow-up was inferred from the current signals."];
+}
+
+function buildReviewQuestions(summary) {
+  const questions = [];
+  if (summary.materialFiles.length > 0) {
+    questions.push(`Which of these files actually changed behavior versus internal cleanup: ${summary.materialFiles.slice(0, 5).join(", ")}?`);
+  }
+  questions.push("What should future-you preserve if this area is edited again?");
+  questions.push("What is the next best task if someone re-enters this repo tomorrow?");
+  if (summary.readmeRecommendation.shouldReview) {
+    questions.push("Did the user-facing setup, commands, or workflow change enough to update README.md?");
+  }
+  return questions;
+}
+
+function detectUserFacingChangeSignals(workspaceRoot, changedFiles) {
+  const signals = [];
+  const normalizedPaths = getMeaningfulChangedFiles(changedFiles);
+  const packageJson = readJsonIfExists(path.join(workspaceRoot, "package.json"));
+
+  if (normalizedPaths.some((file) => file === "package.json")) {
+    signals.push("package metadata or command surface changed");
+  }
+  if (normalizedPaths.some((file) => /(^|\/)(src|app|pages|components|public|media)\//.test(file))) {
+    signals.push("runtime or UI-facing files changed");
+  }
+  if (packageJson?.description) {
+    signals.push("package description may need to stay aligned with behavior");
+  }
+
+  return dedupeByKey(signals, (item) => item);
+}
+
+function buildReadmeRecommendation(workspaceRoot, signals) {
+  const readmePath = path.join(workspaceRoot, "README.md");
+  const shouldReview = fs.existsSync(readmePath) && signals.length > 0;
+
+  return {
+    shouldReview,
+    readmePath: shouldReview ? readmePath : null,
+    reasons: shouldReview ? signals : [],
+  };
+}
+
+function summarizePaths(paths) {
+  const groups = new Set();
+  for (const item of paths) {
+    const clean = item.replace(/^[A-Z?MDRCU!\s]+/, "").trim();
+    const segments = clean.split("/").filter(Boolean);
+    if (segments.length > 1) {
+      groups.add(segments[segments.length - 2]);
+    } else if (segments[0]) {
+      groups.add(segments[0].replace(path.extname(segments[0]), ""));
+    }
+  }
+  return Array.from(groups).slice(0, 4);
+}
+
+function describeDocFreshness(doc, snapshot) {
+  if (!doc.exists) {
+    return "missing";
+  }
+  if (isAutoManagedDoc(doc)) {
+    const newestRepoChange = getNewestRepoChangeTimestamp(snapshot);
+    if (newestRepoChange && parseTimestamp(doc.lastRefreshedAt) < newestRepoChange.timestamp) {
+      return `snapshot older than repo changes in ${newestRepoChange.relativePath}`;
+    }
+    return "snapshot looks current";
+  }
+
+  const staleness = getDocStaleness(doc, snapshot);
+  return staleness.isStale ? staleness.reason : "human notes look current enough";
+}
+
+function docStatusSummary(doc) {
+  if (!doc.exists) {
+    return "missing";
+  }
+  if (isAutoManagedDoc(doc)) {
+    return doc.lastRefreshedAt ? `snapshot updated ${formatRelativeTimestamp(doc.lastRefreshedAt)}` : "snapshot not refreshed yet";
+  }
+  return doc.lastModifiedAt ? `edited ${formatRelativeTimestamp(doc.lastModifiedAt)}` : "present";
 }
 
 async function ensureDirectory(directoryPath) {
@@ -1661,7 +1940,7 @@ class ProjectMemoryViewProvider {
     const validation = await validateResolvedProjectMemory(workspaceFolder, projectMemory);
     const actions = [
       ...heroItems,
-      createSectionItem("Daily Workflow", "Start, summarize, refresh, and finish"),
+      createSectionItem("Daily Workflow", "Start, review, hand off, and finish"),
       createCommandItem(
         "Start Session From Project Memory",
         `Copy the start-session prompt${formatOptionalSuffix(projectMemory.state.lastStartPromptAt, "last used")}`,
@@ -1669,14 +1948,14 @@ class ProjectMemoryViewProvider {
         "play"
       ),
       createCommandItem(
-        "Generate Session Summary",
-        "Create a markdown handoff summary from changed files, commits, decisions, and TODOs",
+        "Generate Session Handoff",
+        "Create a concise handoff from changed files, commits, decisions, and TODOs",
         "codexSessionKit.generateSessionSummary",
         "note"
       ),
       createCommandItem(
-        "Update Memory Docs Now",
-        "Scan the workspace and refresh managed memory sections",
+        "Prepare Handoff Review",
+        "Refresh the machine snapshot and suggest what the human docs should say next",
         "codexSessionKit.updateMemoryDocsNow",
         "sync"
       ),
@@ -1695,12 +1974,12 @@ class ProjectMemoryViewProvider {
               "warning"
             ),
           ]
-        : [createInfoItem("Validation: Healthy", "No missing, stale, or placeholder issues detected", "check")]),
+        : [createInfoItem("Validation: Healthy", "The tracked handoff docs look usable", "check")]),
       createInfoItem(`Branch: ${formatBranchName(projectMemory.currentBranch)}`, buildBranchStatusSummary(projectMemory), "git-branch"),
       createCommandItem("Show Project Memory Status", "Open a status summary for the configured memory docs", "codexSessionKit.showProjectMemoryStatus", "list-tree"),
-      createCommandItem("Validate Memory Docs", "Check for missing, stale, malformed, or placeholder memory docs", "codexSessionKit.validateMemoryDocs", "pass"),
+      createCommandItem("Validate Memory Docs", "Check whether the handoff docs still look usable", "codexSessionKit.validateMemoryDocs", "pass"),
       createSectionItem("Setup & Maintenance", "Initialize, migrate, and tune"),
-      createCommandItem("Initialize Project Memory", "Create any missing config and memory docs, then populate them", "codexSessionKit.initializeProjectMemoryDocs", "new-file"),
+      createCommandItem("Initialize Handoff Docs", "Create the default handoff docs and starter prompts", "codexSessionKit.initializeProjectMemoryDocs", "new-file"),
       createCommandItem(
         "Upgrade AI Context Config To Latest Defaults",
         "Rewrite .vscode/ai-context.json to the latest default role-aware format",
@@ -1755,20 +2034,20 @@ function createInfoItem(label, description, iconId) {
 function buildBranchStatusSummary(projectMemory) {
   const branchStatus = projectMemory.branchStatus;
   if (branchStatus?.hasBranchWarning) {
-    return `Project memory may be stale after switching from ${formatBranchName(branchStatus.previousBranch)} to ${formatBranchName(
+    return `Project memory may need review after switching from ${formatBranchName(branchStatus.previousBranch)} to ${formatBranchName(
       branchStatus.currentBranch
     )}.`;
   }
 
-  return projectMemory.currentBranch ? "Branch-aware memory status looks healthy." : "Git branch unavailable for this workspace.";
+  return projectMemory.currentBranch ? "Branch-aware handoff status looks healthy." : "Git branch unavailable for this workspace.";
 }
 
 function createDocItem(doc) {
   const item = new vscode.TreeItem(doc.relativePath, vscode.TreeItemCollapsibleState.None);
-  item.description = doc.exists ? `updated ${formatRelativeTimestamp(doc.lastRefreshedAt)}` : "missing";
-  item.tooltip = `${doc.absolutePath}${doc.role ? `\nRole: ${doc.role}` : ""}\nLast refreshed: ${formatTimestamp(
-    doc.lastRefreshedAt
-  )}\nLast modified: ${formatTimestamp(doc.lastModifiedAt)}`;
+  item.description = doc.exists ? docStatusSummary(doc) : "missing";
+  item.tooltip = `${doc.absolutePath}${doc.role ? `\nRole: ${doc.role}` : ""}\nFreshness: ${docStatusSummary(doc)}\nLast modified: ${formatTimestamp(
+    doc.lastModifiedAt
+  )}`;
   item.iconPath = new vscode.ThemeIcon(doc.exists ? "file" : "warning");
 
   if (doc.exists) {
@@ -1792,6 +2071,7 @@ function buildSuggestedMemoryDocTargets(docs, summary) {
   const targets = [];
   const currentWorkDoc = findDocByRole(docs, "current-work");
   const decisionsDoc = findDocByRole(docs, "decisions");
+  const briefDoc = findDocByRole(docs, "project-brief");
 
   if (currentWorkDoc) {
     targets.push(`Append the working-summary block to ${formatDocPromptLabel(currentWorkDoc)}.`);
@@ -1799,8 +2079,11 @@ function buildSuggestedMemoryDocTargets(docs, summary) {
   if (decisionsDoc && summary.decisionSignals.length > 0) {
     targets.push(`Append candidate decision follow-ups to ${formatDocPromptLabel(decisionsDoc)}.`);
   }
+  if (briefDoc && summary.readmeRecommendation.shouldReview) {
+    targets.push(`Review ${formatDocPromptLabel(briefDoc)} and README.md together because user-facing behavior may have changed.`);
+  }
   if (targets.length === 0) {
-    targets.push("No matching current-work or decisions docs were configured for automatic append suggestions.");
+    targets.push("No matching handoff docs were configured for automatic append suggestions.");
   }
 
   return targets;
@@ -1816,7 +2099,7 @@ async function ensureDocExists(workspaceFolder, doc) {
   }
 
   await ensureDirectory(path.dirname(doc.absolutePath));
-  fs.writeFileSync(doc.absolutePath, buildInitialDocShell(doc.relativePath, workspaceFolder.name), "utf8");
+  fs.writeFileSync(doc.absolutePath, buildInitialDocShell(doc, workspaceFolder.name), "utf8");
 }
 
 function appendBlockBeforeAutoSection(filePath, block) {
@@ -1838,12 +2121,14 @@ function appendBlockBeforeAutoSection(filePath, block) {
 
 function buildCurrentWorkSummaryBlock(summary) {
   return [
-    `## Session Summary - ${formatDateOnly(summary.generatedAt)}`,
+    `## Last Meaningful Change - ${formatDateOnly(summary.generatedAt)}`,
     `- Branch: \`${formatBranchName(summary.branch)}\``,
-    `- Generated: ${formatTimestamp(summary.generatedAt)}`,
-    `- Changed files: ${summary.changedFiles.length ? summary.changedFiles.join(", ") : "No changed files detected."}`,
-    `- Recent commits: ${summary.commits.length ? summary.commits.map((commit) => `\`${commit.shortHash}\` ${commit.subject}`).join("; ") : "No recent commits detected."}`,
-    `- TODOs added: ${summary.todoAdditions.length ? summary.todoAdditions.map((item) => `\`${item.filePath}\` ${item.text}`).join("; ") : "No added TODOs detected."}`,
+    `- What changed: ${summary.whatChanged.join(" ")}`,
+    `- Why: ${summary.whyChanged.join(" ")}`,
+    `- Files touched: ${summary.materialFiles.length ? summary.materialFiles.join(", ") : "No meaningful changed files detected."}`,
+    `- Rules to preserve: ${summary.preserveRules.join(" ")}`,
+    `- Next best task: ${summary.nextBestTask.join(" ")}`,
+    `- Do not forget: ${summary.doNotForget.join(" ")}`,
   ].join("\n");
 }
 
@@ -1857,6 +2142,14 @@ function buildDecisionCandidatesBlock(summary) {
   }
 
   return lines.join("\n");
+}
+
+function buildReadmeFollowUpBlock(readmeRecommendation) {
+  return [
+    `## README Follow-Up - ${formatDateOnly(new Date().toISOString())}`,
+    `- Review README.md because ${readmeRecommendation.reasons.join("; ")}.`,
+    "- Update user-facing setup, workflow, or behavior notes if those changes are now material.",
+  ].join("\n");
 }
 
 function buildDefaultBranchAwarenessState() {
@@ -1898,8 +2191,8 @@ function getBranchStatus(projectMemory) {
   }
 
   const docsNeedRefresh = projectMemory.docs.some((doc) => {
-    const refreshedAt = parseTimestamp(doc.lastRefreshedAt);
-    return !refreshedAt || refreshedAt < switchedAt;
+    const relevantTimestamp = parseTimestamp(isAutoManagedDoc(doc) ? doc.lastRefreshedAt : doc.lastModifiedAt ?? doc.lastRefreshedAt);
+    return !relevantTimestamp || relevantTimestamp < switchedAt;
   });
 
   return {
@@ -2098,13 +2391,16 @@ function buildValidationSummaryLabel(validation) {
     parts.push(`${validation.summary.missingDocs} missing`);
   }
   if (validation.summary.staleDocs > 0) {
-    parts.push(`${validation.summary.staleDocs} stale`);
+    parts.push(`${validation.summary.staleDocs} review`);
   }
   if (validation.summary.placeholderDocs > 0) {
-    parts.push(`${validation.summary.placeholderDocs} placeholder`);
+    parts.push(`${validation.summary.placeholderDocs} starter`);
   }
   if (validation.summary.malformedDocs > 0) {
     parts.push(`${validation.summary.malformedDocs} malformed`);
+  }
+  if (validation.readmeRecommendation?.shouldReview) {
+    parts.push("README review");
   }
   return parts.join(", ");
 }
